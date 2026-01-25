@@ -45,7 +45,7 @@ graph LR
 ## FuseMoE
 ```mermaid
 graph LR
-    subgraph FuseMoE["FuseMoE (NEW)"]
+    subgraph FuseMoE["FuseMoE"]
         F1["RGB + HSI<br/>Concatenate"]
         F2["Conv<br/>Projection"]
         F3["Mixture of<br/>Experts"]
@@ -58,6 +58,57 @@ graph LR
     end
 
     style FuseMoE fill:#fff3e0
+```
+
+## MAE-MoE (PROPOSED)
+```mermaid
+graph LR
+    subgraph MAEMoE["MAE-MoE: Self-Supervised MoE"]
+        MM1["RGB + HSI<br/>Separate"]
+        MM2["Dual MAE<br/>Pretrain"]
+        MM3["MoE Fusion<br/>Per-Modality Router"]
+        MM4["Decoder"]
+        MM5["Output"]
+        MM1 --> MM2 --> MM3 --> MM4 --> MM5
+    end
+
+    style MAEMoE fill:#fce4ec
+```
+
+## HMoE-Seg (PROPOSED)
+```mermaid
+graph LR
+    subgraph HMoE["HMoE-Seg: Hierarchical MoE"]
+        H1["RGB"]
+        H2["HSI"]
+        H3["Dual<br/>Encoders"]
+        H4["Hierarchical<br/>MoE Fusion"]
+        H5["Decoder"]
+        H6["Output"]
+        H1 --> H3
+        H2 --> H3
+        H3 --> H4 --> H5 --> H6
+    end
+
+    style HMoE fill:#e0f2f1
+```
+
+## MAE-CMX (PROPOSED)
+```mermaid
+graph LR
+    subgraph MAECMX["MAE-CMX: Pretrained Cross-Modal"]
+        MC1["RGB"]
+        MC2["HSI"]
+        MC3["MAE Pretrained<br/>Encoders"]
+        MC4["Cross-Modal<br/>Fusion (FRM+FFM)"]
+        MC5["Decoder"]
+        MC6["Output"]
+        MC1 --> MC3
+        MC2 --> MC3
+        MC3 --> MC4 --> MC4 --> MC5 --> MC6
+    end
+
+    style MAECMX fill:#f1f8e9
 ```
 
 # Detail
@@ -256,3 +307,337 @@ graph TB
     style FM_EXP fill:#ffcc80,color:#000
     style FM_OUT fill:#ffe0b2,color:#000
 ```
+
+## MAE-MoE (PROPOSED)
+```mermaid
+graph TB
+    subgraph MAEMoE["MAE-MoE: Self-Supervised Pretrained MoE Architecture"]
+        direction TB
+        MAEM_RGB["RGB Input"]
+        MAEM_HSI["HSI Input"]
+
+        subgraph MAEM_PRE["Pretrain Stage (Optional)"]
+            direction LR
+            subgraph MAEM_MAE_RGB["MAE Encoder RGB"]
+                MAEM_PE_R["PatchEmbed Spatial"]
+                MAEM_MASK_R["Random Masking<br/>75% mask ratio"]
+                MAEM_ENC_R["ViT Encoder<br/>Spatial Branch"]
+            end
+
+            subgraph MAEM_MAE_HSI["MAE Encoder HSI"]
+                MAEM_PE_H["PatchEmbed Spatial+Channel"]
+                MAEM_MASK_H["Random Masking<br/>Dual Branch"]
+                MAEM_ENC_H["ViT Encoder<br/>Spatial+Channel Branch"]
+            end
+
+            MAEM_DEC["MAE Decoder<br/>Reconstruction"]
+            MAEM_LOSS["MSE Loss<br/>on Masked Patches"]
+        end
+
+        subgraph MAEM_SEG["Segmentation Stage"]
+            direction TB
+            MAEM_FEAT_R["Pretrained Features RGB<br/>from MAE Encoder"]
+            MAEM_FEAT_H["Pretrained Features HSI<br/>from MAE Encoder"]
+
+            subgraph MAEM_MOE["Per-Modality MoE Fusion"]
+                MAEM_GATE_R["Gating Network RGB<br/>Per-Modality Router"]
+                MAEM_GATE_H["Gating Network HSI<br/>Per-Modality Router"]
+                MAEM_ROUTER["Joint Router<br/>Cross-Modal Selection"]
+
+                subgraph MAEM_EXP["Shared Expert Pool"]
+                    MAEM_E1["Expert 1<br/>RGB Specialist"]
+                    MAEM_E2["Expert 2<br/>HSI Specialist"]
+                    MAEM_E3["Expert 3<br/>Fusion Specialist"]
+                    MAEM_EN["Expert N<br/>General"]
+                end
+
+                MAEM_DISP["SparseDispatcher<br/>Modality-Aware"]
+                MAEM_COMB["Weighted Combination<br/>Load Balancing"]
+            end
+
+            MAEM_HEAD["Segmentation Head<br/>→ num_classes"]
+        end
+
+        MAEM_RGB --> MAEM_PE_R --> MAEM_MASK_R --> MAEM_ENC_R
+        MAEM_HSI --> MAEM_PE_H --> MAEM_MASK_H --> MAEM_ENC_H
+        MAEM_ENC_R & MAEM_ENC_H --> MAEM_DEC --> MAEM_LOSS
+
+        MAEM_ENC_R --> MAEM_FEAT_R
+        MAEM_ENC_H --> MAEM_FEAT_H
+        MAEM_FEAT_R --> MAEM_GATE_R
+        MAEM_FEAT_H --> MAEM_GATE_H
+        MAEM_GATE_R & MAEM_GATE_H --> MAEM_ROUTER
+        MAEM_ROUTER --> MAEM_DISP
+        MAEM_DISP --> MAEM_E1 & MAEM_E2 & MAEM_E3 & MAEM_EN
+        MAEM_E1 & MAEM_E2 & MAEM_E3 & MAEM_EN --> MAEM_COMB
+        MAEM_COMB --> MAEM_HEAD
+    end
+
+    style MAEMoE fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#000
+    style MAEM_PRE fill:#f8bbd0,color:#000
+    style MAEM_MAE_RGB fill:#f48fb1,color:#000
+    style MAEM_MAE_HSI fill:#f48fb1,color:#000
+    style MAEM_SEG fill:#f8bbd0,color:#000
+    style MAEM_MOE fill:#f48fb1,color:#000
+    style MAEM_EXP fill:#ec407a,color:#fff
+```
+
+## HMoE-Seg (PROPOSED)
+```mermaid
+graph TB
+    subgraph HMoE["HMoE-Seg: Hierarchical Mixture of Experts Segmentation"]
+        direction TB
+        HMOE_RGB["RGB Input"]
+        HMOE_HSI["HSI Input"]
+
+        subgraph HMOE_ENC["Dual Encoders"]
+            direction LR
+            subgraph HMOE_ENC_R["RGB Encoder"]
+                HMOE_S1_R["Stage 1<br/>PatchEmbed + Blocks"]
+                HMOE_S2_R["Stage 2<br/>Downsample + Blocks"]
+                HMOE_S3_R["Stage 3<br/>Downsample + Blocks"]
+                HMOE_S4_R["Stage 4<br/>Downsample + Blocks"]
+            end
+
+            subgraph HMOE_ENC_H["HSI Encoder"]
+                HMOE_S1_H["Stage 1<br/>PatchEmbed + Blocks"]
+                HMOE_S2_H["Stage 2<br/>Downsample + Blocks"]
+                HMOE_S3_H["Stage 3<br/>Downsample + Blocks"]
+                HMOE_S4_H["Stage 4<br/>Downsample + Blocks"]
+            end
+        end
+
+        subgraph HMOE_FUSION["Hierarchical MoE Fusion"]
+            direction TB
+
+            subgraph HMOE_L1["Level 1: Outer MoE (Coarse)"]
+                HMOE_GATE_O["Outer Gating<br/>Modality-Level Selection"]
+                HMOE_EXP_O1["Outer Expert 1<br/>RGB-Dominant"]
+                HMOE_EXP_O2["Outer Expert 2<br/>HSI-Dominant"]
+                HMOE_EXP_O3["Outer Expert 3<br/>Balanced"]
+            end
+
+            subgraph HMOE_L2["Level 2: Inner MoE (Fine)"]
+                HMOE_GATE_I["Inner Gating<br/>Feature-Level Selection"]
+                HMOE_EXP_I1["Inner Expert 1<br/>Low-Level Features"]
+                HMOE_EXP_I2["Inner Expert 2<br/>Mid-Level Features"]
+                HMOE_EXP_I3["Inner Expert 3<br/>High-Level Features"]
+                HMOE_EXP_I4["Inner Expert 4<br/>Semantic Features"]
+            end
+
+            HMOE_COMB["Hierarchical Combination<br/>Weighted Aggregation"]
+        end
+
+        subgraph HMOE_DEC["Decoder"]
+            HMOE_UP1["Upsample 1<br/>+ Skip Connection"]
+            HMOE_UP2["Upsample 2<br/>+ Skip Connection"]
+            HMOE_UP3["Upsample 3<br/>+ Skip Connection"]
+            HMOE_HEAD["Segmentation Head<br/>→ num_classes"]
+        end
+
+        HMOE_RGB --> HMOE_S1_R --> HMOE_S2_R --> HMOE_S3_R --> HMOE_S4_R
+        HMOE_HSI --> HMOE_S1_H --> HMOE_S2_H --> HMOE_S3_H --> HMOE_S4_H
+
+        HMOE_S4_R & HMOE_S4_H --> HMOE_GATE_O
+        HMOE_GATE_O --> HMOE_EXP_O1 & HMOE_EXP_O2 & HMOE_EXP_O3
+        HMOE_EXP_O1 & HMOE_EXP_O2 & HMOE_EXP_O3 --> HMOE_GATE_I
+        HMOE_GATE_I --> HMOE_EXP_I1 & HMOE_EXP_I2 & HMOE_EXP_I3 & HMOE_EXP_I4
+        HMOE_EXP_I1 & HMOE_EXP_I2 & HMOE_EXP_I3 & HMOE_EXP_I4 --> HMOE_COMB
+
+        HMOE_COMB --> HMOE_UP1
+        HMOE_S3_R & HMOE_S3_H --> HMOE_UP1
+        HMOE_UP1 --> HMOE_UP2
+        HMOE_S2_R & HMOE_S2_H --> HMOE_UP2
+        HMOE_UP2 --> HMOE_UP3
+        HMOE_S1_R & HMOE_S1_H --> HMOE_UP3
+        HMOE_UP3 --> HMOE_HEAD
+    end
+
+    style HMoE fill:#e0f2f1,stroke:#00796b,stroke-width:2px,color:#000
+    style HMOE_ENC fill:#b2dfdb,color:#000
+    style HMOE_ENC_R fill:#80cbc4,color:#000
+    style HMOE_ENC_H fill:#80cbc4,color:#000
+    style HMOE_FUSION fill:#b2dfdb,color:#000
+    style HMOE_L1 fill:#4db6ac,color:#000
+    style HMOE_L2 fill:#4db6ac,color:#000
+    style HMOE_DEC fill:#b2dfdb,color:#000
+```
+
+## MAE-CMX (PROPOSED)
+```mermaid
+graph TB
+    subgraph MAECMX["MAE-CMX: MAE Pretrained Cross-Modal Transformer"]
+        direction TB
+        MCMX_RGB["RGB Input"]
+        MCMX_HSI["HSI Input"]
+
+        subgraph MCMX_PRE["Pretrain Stage (Optional)"]
+            direction LR
+            subgraph MCMX_MAE_R["MAE RGB"]
+                MCMX_MASK_R["Masking 75%"]
+                MCMX_ENC_R["ViT Encoder"]
+                MCMX_DEC_R["Decoder"]
+            end
+
+            subgraph MCMX_MAE_H["MAE HSI"]
+                MCMX_MASK_H["Masking 75%<br/>Spatial+Channel"]
+                MCMX_ENC_H["ViT Encoder<br/>Dual Branch"]
+                MCMX_DEC_H["Decoder"]
+            end
+
+            MCMX_LOSS_P["Reconstruction Loss"]
+        end
+
+        subgraph MCMX_ENC["Dual Pretrained Encoders (4 Stages)"]
+            direction LR
+            subgraph MCMX_S1["Stage 1"]
+                MCMX_PE1_R["PatchEmbed RGB<br/>Initialized from MAE"]
+                MCMX_PE1_H["PatchEmbed HSI<br/>Initialized from MAE"]
+                MCMX_B1_R["Transformer Blocks RGB<br/>Pretrained Weights"]
+                MCMX_B1_H["Transformer Blocks HSI<br/>Pretrained Weights"]
+                MCMX_FRM1["FRM 1<br/>Feature Rectify Module<br/>Channel+Spatial Attention"]
+                MCMX_FFM1["FFM 1<br/>Feature Fusion Module<br/>CrossPath + ChannelEmbed"]
+            end
+
+            subgraph MCMX_S2["Stage 2"]
+                MCMX_B2_R["Blocks RGB"]
+                MCMX_B2_H["Blocks HSI"]
+                MCMX_FRM2["FRM 2"]
+                MCMX_FFM2["FFM 2"]
+            end
+
+            subgraph MCMX_S3["Stage 3"]
+                MCMX_B3_R["Blocks RGB"]
+                MCMX_B3_H["Blocks HSI"]
+                MCMX_FRM3["FRM 3"]
+                MCMX_FFM3["FFM 3"]
+            end
+
+            subgraph MCMX_S4["Stage 4"]
+                MCMX_B4_R["Blocks RGB"]
+                MCMX_B4_H["Blocks HSI"]
+                MCMX_FRM4["FRM 4"]
+                MCMX_FFM4["FFM 4"]
+            end
+        end
+
+        subgraph MCMX_DEC["MLP Decoder"]
+            MCMX_L1["Linear C1<br/>→ embed_dim"]
+            MCMX_L2["Linear C2<br/>→ embed_dim"]
+            MCMX_L3["Linear C3<br/>→ embed_dim"]
+            MCMX_L4["Linear C4<br/>→ embed_dim"]
+            MCMX_UP["Upsample All<br/>to C1 size"]
+            MCMX_FUSE["Conv Fuse<br/>→ embed_dim"]
+            MCMX_PRED["Linear Pred<br/>→ num_classes"]
+        end
+
+        MCMX_RGB --> MCMX_MASK_R --> MCMX_ENC_R --> MCMX_DEC_R
+        MCMX_HSI --> MCMX_MASK_H --> MCMX_ENC_H --> MCMX_DEC_H
+        MCMX_DEC_R & MCMX_DEC_H --> MCMX_LOSS_P
+
+        MCMX_RGB --> MCMX_PE1_R --> MCMX_B1_R
+        MCMX_HSI --> MCMX_PE1_H --> MCMX_B1_H
+        MCMX_B1_R & MCMX_B1_H --> MCMX_FRM1 --> MCMX_FFM1
+
+        MCMX_FFM1 --> MCMX_B2_R & MCMX_B2_H
+        MCMX_B2_R & MCMX_B2_H --> MCMX_FRM2 --> MCMX_FFM2
+
+        MCMX_FFM2 --> MCMX_B3_R & MCMX_B3_H
+        MCMX_B3_R & MCMX_B3_H --> MCMX_FRM3 --> MCMX_FFM3
+
+        MCMX_FFM3 --> MCMX_B4_R & MCMX_B4_H
+        MCMX_B4_R & MCMX_B4_H --> MCMX_FRM4 --> MCMX_FFM4
+
+        MCMX_FFM1 --> MCMX_L1
+        MCMX_FFM2 --> MCMX_L2
+        MCMX_FFM3 --> MCMX_L3
+        MCMX_FFM4 --> MCMX_L4
+
+        MCMX_L1 & MCMX_L2 & MCMX_L3 & MCMX_L4 --> MCMX_UP --> MCMX_FUSE --> MCMX_PRED
+    end
+
+    style MAECMX fill:#f1f8e9,stroke:#689f38,stroke-width:2px,color:#000
+    style MCMX_PRE fill:#dcedc8,color:#000
+    style MCMX_MAE_R fill:#c5e1a5,color:#000
+    style MCMX_MAE_H fill:#c5e1a5,color:#000
+    style MCMX_ENC fill:#dcedc8,color:#000
+    style MCMX_S1 fill:#aed581,color:#000
+    style MCMX_S2 fill:#aed581,color:#000
+    style MCMX_S3 fill:#aed581,color:#000
+    style MCMX_S4 fill:#aed581,color:#000
+    style MCMX_DEC fill:#dcedc8,color:#000
+```
+
+# Proposed Models Summary
+
+## 1. MAE-MoE: Self-Supervised Pretrained Mixture of Experts
+**Key Innovation**: Combines self-supervised pretraining (MAE) with adaptive expert routing (MoE)
+
+**Advantages**:
+- **Better initialization**: MAE pretraining learns robust representations from unlabeled RGB+HSI data
+- **Modality-specific experts**: Per-modality router allows specialized experts for RGB vs HSI
+- **Efficient inference**: Sparse activation (top-k experts) reduces computation
+- **Transfer learning**: Pretrained encoder can be reused across different waste segmentation tasks
+
+**Architecture Details**:
+- Pretrain stage: Dual MAE encoders (RGB spatial + HSI spatial+channel) with 75% masking
+- Segmentation stage: Per-modality MoE with joint router for cross-modal expert selection
+- Expert specialization: RGB-specialist, HSI-specialist, fusion-specialist, and general experts
+- Load balancing loss ensures all experts are utilized
+
+**Best for**: Scenarios with limited labeled data but abundant unlabeled RGB+HSI pairs
+
+---
+
+## 2. HMoE-Seg: Hierarchical Mixture of Experts Segmentation
+**Key Innovation**: Two-level hierarchical MoE for coarse-to-fine multimodal fusion
+
+**Advantages**:
+- **Hierarchical fusion**: Outer MoE selects modality-level strategy, inner MoE refines feature-level fusion
+- **Multi-scale features**: Skip connections from all encoder stages to decoder
+- **Adaptive fusion**: Different fusion strategies at different semantic levels
+- **Interpretability**: Outer experts show which modality dominates for different regions
+
+**Architecture Details**:
+- Dual encoders: Separate RGB and HSI encoders with 4 stages each
+- Outer MoE (Level 1): 3 experts for RGB-dominant, HSI-dominant, and balanced fusion
+- Inner MoE (Level 2): 4 experts for low/mid/high/semantic level features
+- Decoder: Progressive upsampling with skip connections from all stages
+
+**Best for**: Complex scenes where different regions require different fusion strategies (e.g., some waste types more visible in RGB, others in HSI)
+
+---
+
+## 3. MAE-CMX: MAE Pretrained Cross-Modal Transformer
+**Key Innovation**: Enhances CMX with MAE pretraining for better initialization
+
+**Advantages**:
+- **Strong baseline**: Builds on proven CMX architecture (FRM+FFM modules)
+- **Better convergence**: MAE pretrained weights provide better starting point
+- **Dual-branch MAE**: Spatial+channel masking for HSI captures spectral correlations
+- **Cross-modal attention**: FRM and FFM modules explicitly model RGB-HSI interactions
+
+**Architecture Details**:
+- Pretrain: Separate MAE for RGB (spatial only) and HSI (spatial+channel dual branch)
+- Encoder: 4-stage dual encoders initialized from MAE weights
+- Fusion: FRM (Feature Rectify Module) + FFM (Feature Fusion Module) at each stage
+- Decoder: MLP decoder with multi-scale feature aggregation
+
+**Best for**: When you have unlabeled data for pretraining and want to leverage CMX's proven cross-modal fusion
+
+---
+
+## Comparison Table
+
+| Model | Pretraining | Fusion Strategy | Complexity | Best Use Case |
+|-------|-------------|-----------------|------------|---------------|
+| **FuseMoE** | ❌ | Sparse MoE (joint) | Medium | Baseline MoE approach |
+| **MAE-MoE** | ✅ MAE | Per-modality MoE | High | Limited labeled data |
+| **HMoE-Seg** | ❌ | Hierarchical MoE | Very High | Complex scenes, interpretability |
+| **MAE-CMX** | ✅ MAE | FRM+FFM (CMX) | High | Leverage CMX + pretraining |
+
+## Implementation Priority
+
+1. **MAE-MoE** - Most innovative, combines best of both base models
+2. **MAE-CMX** - Easier to implement, builds on existing CMX
+3. **HMoE-Seg** - Most complex, implement if others show MoE benefits
