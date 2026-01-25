@@ -8,6 +8,8 @@ from .mae_encoder import DualBranchMAEEncoder
 from .patch_embed import PatchEmbed_spa, PatchEmbed_chan, PositionEmbed
 from .vit_layers import DropPath, Mlp, Mlp_wo_gate, trunc_normal_
 from .activations import ACT2FN, get_activation
+from .mae_pretrain import RGBMAEPretrainer, HSIMAEPretrainer, MaskTransLayerNorm
+from .mae_loss import MSELoss, build_mask_spa, build_mask_chan
 
 __all__ = [
     'MAEMoE',
@@ -29,5 +31,11 @@ __all__ = [
     'trunc_normal_',
     'ACT2FN',
     'get_activation',
+    'RGBMAEPretrainer',
+    'HSIMAEPretrainer',
+    'MaskTransLayerNorm',
+    'MSELoss',
+    'build_mask_spa',
+    'build_mask_chan',
 ]
 
