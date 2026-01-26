@@ -3,6 +3,7 @@ import torch
 from . import mininet
 from . import cmx
 from . import segformer
+from . import unet
 
 
 class MiniNet(torch.nn.Module):
@@ -14,6 +15,7 @@ class MiniNet(torch.nn.Module):
     def forward(self, input):
         return self.model(input)
 
+
 class MiniNetMultimodal(torch.nn.Module):
     def __init__(self, in_channels: list[int], num_classes: int):
         super().__init__()
@@ -23,6 +25,7 @@ class MiniNetMultimodal(torch.nn.Module):
         input = torch.concat(inputs, axis=1)
         return self.model(input)
 
+
 class SegFormer(torch.nn.Module):
     def __init__(self, in_channels: int, num_classes: int, encoder: str):
         super().__init__()
@@ -30,6 +33,7 @@ class SegFormer(torch.nn.Module):
 
     def forward(self, input):
         return self.model(input)
+
 
 class SegFormerMultimodal(torch.nn.Module):
     def __init__(self, in_channels: int, num_classes: int, encoder: str):
@@ -39,6 +43,7 @@ class SegFormerMultimodal(torch.nn.Module):
     def forward(self, inputs):
         input = torch.concat(inputs, axis=1)
         return self.model(input)
+
 
 class CMX(torch.nn.Module):
     def __init__(self, in_channels: list[int], num_classes: int, encoder: str):
@@ -50,6 +55,13 @@ class CMX(torch.nn.Module):
         input1, input2 = inputs
         return self.model(input1, input2)
 
+class UNet(torch.nn.Module):
+    def __init__(self, in_channels, num_classes):
+        super().__init__()
+        self.model = unet.UNet(in_channels, num_classes)
+
+    def forward(self, input):
+        return self.model(input)
 
 def create_model(name, in_channels, num_classes):
     if name == 'mininet':
@@ -62,6 +74,8 @@ def create_model(name, in_channels, num_classes):
         model = SegFormerMultimodal(in_channels, num_classes, 'mit_b0')
     elif name == 'cmx_b0':
         model = CMX(in_channels, num_classes, 'mit_b0')
+    elif name == 'unet':
+        model = UNet(in_channels, num_classes)
     else:
         raise ValueError(f'Unknown model: {name}')
     return model
@@ -81,6 +95,9 @@ def create_optimizers(name, model, max_epochs):
         optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.1)
     elif name == 'cmx_b0':
+        optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
+        lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
+    elif name == 'unet':
         optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
     else:
