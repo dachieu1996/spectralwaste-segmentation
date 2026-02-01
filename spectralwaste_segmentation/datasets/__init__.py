@@ -1,1 +1,6 @@
-from .spectralwaste import SpectralWasteSegmentation, SemanticSegmentationTrain, SemanticSegmentationTest
+from .spectralwaste import (
+    SpectralWasteSegmentation,
+    HeterogeneousSpectralWasteSegmentation,
+    SemanticSegmentationTrain,
+    SemanticSegmentationTest,
+)

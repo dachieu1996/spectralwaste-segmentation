@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 
-from typing import Union
+from typing import Union, Optional, Dict, Literal, Tuple
 
 from collections import namedtuple
 
@@ -146,3 +146,102 @@ class SpectralWasteSegmentation(torchvision.datasets.VisionDataset):
 
     def __len__(self):
         return len(self.input_paths[0])
+
+
+class HeterogeneousSpectralWasteSegmentation(SpectralWasteSegmentation):
+    """
+    Dataset wrapper for training with *heterogeneous modality availability*.
+
+    We always load **both** modalities (RGB + HSI) so the model input channel
+    count is constant, but optionally "drop" one modality by replacing it with
+    zeros to simulate:
+      - `both`: RGB + HSI available
+      - `rgb`:  RGB-only (HSI is zeroed)
+      - `hyper`: HSI-only (RGB is zeroed)
+
+    Typical usage:
+      - Train: `forced_mode=None` and choose per-sample mode from `modal_mix`.
+      - Eval: set `forced_mode` to a fixed mode for deterministic metrics.
+    """
+
+    Mode = Literal["both", "rgb", "hyper"]
+    _VALID_FORCED_MODES: Tuple[Mode, ...] = ("both", "rgb", "hyper")
+
+    def __init__(
+        self,
+        root: str,
+        split: str = "train",
+        input_mode: Union[str, list[str]] = ["rgb", "hyper"],
+        target_mode: str = "labels_rgb",
+        target_type: str = "semantic",
+        transform=None,
+        target_transform=None,
+        transforms=None,
+        *,
+        modal_mix: Optional[Dict[str, float]] = None,
+        forced_mode: Optional[Mode] = None,
+    ):
+        input_modes = list(input_mode) if isinstance(input_mode, (list, tuple)) else [input_mode]
+        if set(input_modes) != {"rgb", "hyper"} or len(input_modes) != 2:
+            raise ValueError("HeterogeneousSpectralWasteSegmentation requires input_mode=['rgb','hyper'] (order free).")
+
+        if forced_mode is not None and forced_mode not in self._VALID_FORCED_MODES:
+            raise ValueError(f"forced_mode must be one of {list(self._VALID_FORCED_MODES)}")
+
+        # Store mix; actual per-sample mode assignment is done after the base
+        # dataset has loaded file lists (i.e. after super().__init__()).
+        mix = modal_mix or {"both": 1.0, "rgb": 0.0, "hyper": 0.0}
+        self._modal_mix = {
+            "both": float(mix.get("both", 0.0)),
+            "rgb": float(mix.get("rgb", 0.0)),
+            "hyper": float(mix.get("hyper", 0.0)),
+        }
+        self._mode_by_idx: Optional[list[HeterogeneousSpectralWasteSegmentation.Mode]] = None
+
+        # SpectralWasteSegmentation.__init__ probes `self[0]` to infer channel
+        # counts; make this deterministic regardless of `modal_mix`.
+        self.forced_mode: Optional[HeterogeneousSpectralWasteSegmentation.Mode] = "both"
+
+        super().__init__(
+            root=root,
+            split=split,
+            input_mode=input_modes,
+            target_mode=target_mode,
+            target_type=target_type,
+            transform=transform,
+            target_transform=target_transform,
+            transforms=transforms,
+        )
+        self.forced_mode = forced_mode
+
+        # Assign a mode for each sample once (in init) so __getitem__ stays
+        # simple and deterministic within this dataset instance.
+        if self.forced_mode is None:
+            probs = torch.tensor(
+                [self._modal_mix["both"], self._modal_mix["rgb"], self._modal_mix["hyper"]],
+                dtype=torch.float32,
+            )
+            total = float(probs.sum().item())
+            probs = (probs / total) if total > 0 else torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
+            mode_ids = torch.multinomial(probs, num_samples=len(self), replacement=True)
+            self._mode_by_idx = [self._VALID_FORCED_MODES[int(i)] for i in mode_ids.tolist()]
+
+    def __getitem__(self, idx):
+        inputs, target = super().__getitem__(idx)
+        if not isinstance(inputs, list) or len(inputs) != 2:
+            raise RuntimeError("Expected 2-modalities inputs as a list [rgb, hyper].")
+
+        rgb, hyper = inputs
+        if self.forced_mode is not None:
+            mode = self.forced_mode
+        else:
+            if self._mode_by_idx is None:
+                raise RuntimeError("Internal error: _mode_by_idx not initialized.")
+            mode = self._mode_by_idx[idx]
+
+        if mode == "rgb":
+            hyper = torch.zeros_like(hyper)
+        elif mode == "hyper":
+            rgb = torch.zeros_like(rgb)
+
+        return [rgb, hyper], target

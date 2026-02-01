@@ -22,7 +22,7 @@ class MiniNetMultimodal(torch.nn.Module):
         self.model = mininet.MiniNetv2(sum(in_channels), num_classes, interpolate=True)
 
     def forward(self, inputs):
-        input = torch.concat(inputs, axis=1)
+        input = torch.concat(inputs, dim=1)
         return self.model(input)
 
 
@@ -41,7 +41,7 @@ class SegFormerMultimodal(torch.nn.Module):
         self.model = segformer.SegFormer(in_chans=sum(in_channels), num_classes=num_classes, backbone=encoder)
 
     def forward(self, inputs):
-        input = torch.concat(inputs, axis=1)
+        input = torch.concat(inputs, dim=1)
         return self.model(input)
 
 
@@ -63,13 +63,36 @@ class UNet(torch.nn.Module):
     def forward(self, input):
         return self.model(input)
 
+
+class UNetMultimodal(torch.nn.Module):
+    def __init__(self, in_channels: list[int], num_classes: int):
+        super().__init__()
+        self.model = unet.UNet(sum(in_channels), num_classes)
+
+    def forward(self, inputs):
+        input = torch.concat(inputs, dim=1)
+        return self.model(input)
+
+
 class UNetMoE(torch.nn.Module):
     def __init__(self, in_channels, num_classes):
         super().__init__()
         self.model = unet.UNetMoE(in_channels, num_classes, num_experts=4, k=2)
+        self.return_aux_loss = False
 
     def forward(self, input):
-        return self.model(input)
+        return self.model(input, return_aux_loss=self.return_aux_loss)
+
+
+class UNetMoEMultimodal(torch.nn.Module):
+    def __init__(self, in_channels: list[int], num_classes: int):
+        super().__init__()
+        self.model = unet.UNetMoE(sum(in_channels), num_classes, num_experts=4, k=2)
+        self.return_aux_loss = False
+
+    def forward(self, inputs):
+        input = torch.concat(inputs, dim=1)
+        return self.model(input, return_aux_loss=self.return_aux_loss)
 
 def create_model(name, in_channels, num_classes):
     if name == 'mininet':
@@ -84,8 +107,12 @@ def create_model(name, in_channels, num_classes):
         model = CMX(in_channels, num_classes, 'mit_b0')
     elif name == 'unet':
         model = UNet(in_channels, num_classes)
+    elif name == 'unet_multimodal':
+        model = UNetMultimodal(in_channels, num_classes)
     elif name == 'unet_moe':
         model = UNetMoE(in_channels, num_classes)
+    elif name == 'unet_moe_multimodal':
+        model = UNetMoEMultimodal(in_channels, num_classes)
     else:
         raise ValueError(f'Unknown model: {name}')
     return model
@@ -110,7 +137,13 @@ def create_optimizers(name, model, max_epochs):
     elif name == 'unet':
         optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
+    elif name == 'unet_multimodal':
+        optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
+        lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
     elif name == 'unet_moe':
+        optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
+        lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
+    elif name == 'unet_moe_multimodal':
         optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
     else:

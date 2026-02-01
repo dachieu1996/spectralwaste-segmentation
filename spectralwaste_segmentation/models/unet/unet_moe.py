@@ -251,7 +251,7 @@ class UNetMoE(nn.Module):
             load = self._gates_to_load(gates)
         return gates, load
 
-    def forward(self, x, loss_coef=1e-2):
+    def forward(self, x, loss_coef=1e-2, return_aux_loss: bool = False):
         """Args:
         x: tensor shape [batch_size, input_size]
         train: a boolean scalar.
@@ -276,5 +276,6 @@ class UNetMoE(nn.Module):
         gates = dispatcher.expert_to_gates()
         expert_outputs = [self.experts[i](expert_inputs[i]) for i in range(self.num_experts)]
         y = dispatcher.combine(expert_outputs)
-        # return y, loss
+        if return_aux_loss:
+            return y, loss
         return y
