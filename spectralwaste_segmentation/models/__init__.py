@@ -63,6 +63,14 @@ class UNet(torch.nn.Module):
     def forward(self, input):
         return self.model(input)
 
+class UNetMoE(torch.nn.Module):
+    def __init__(self, in_channels, num_classes):
+        super().__init__()
+        self.model = unet.UNetMoE(in_channels, num_classes, num_experts=4, k=2)
+
+    def forward(self, input):
+        return self.model(input)
+
 def create_model(name, in_channels, num_classes):
     if name == 'mininet':
         model = MiniNet(in_channels, num_classes)
@@ -76,6 +84,8 @@ def create_model(name, in_channels, num_classes):
         model = CMX(in_channels, num_classes, 'mit_b0')
     elif name == 'unet':
         model = UNet(in_channels, num_classes)
+    elif name == 'unet_moe':
+        model = UNetMoE(in_channels, num_classes)
     else:
         raise ValueError(f'Unknown model: {name}')
     return model
@@ -98,6 +108,9 @@ def create_optimizers(name, model, max_epochs):
         optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
     elif name == 'unet':
+        optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
+        lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
+    elif name == 'unet_moe':
         optimizer = torch.optim.AdamW(model.model.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, max_epochs, 0.9)
     else:
