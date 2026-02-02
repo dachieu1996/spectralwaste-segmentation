@@ -4,8 +4,10 @@ import uuid
 
 import torch
 import torchmetrics
+import torch.distributed as dist
 
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from tqdm import trange
 import wandb
@@ -21,10 +23,32 @@ from spectralwaste_segmentation import models
 torch.manual_seed(0)
 torch.cuda.manual_seed(0)
 
+def _is_dist():
+    return dist.is_available() and dist.is_initialized()
+
+def _rank():
+    return dist.get_rank() if _is_dist() else 0
+
+def _world_size():
+    return dist.get_world_size() if _is_dist() else 1
+
+def _is_main_process():
+    return _rank() == 0
+
+def _get_ddp_model_state_dict(model):
+    # If wrapped in DDP, persist underlying module weights
+    if hasattr(model, "module"):
+        return model.module.state_dict()
+    return model.state_dict()
+
+def _load_ddp_model_state_dict(model, state_dict):
+    if hasattr(model, "module"):
+        return model.module.load_state_dict(state_dict)
+    return model.load_state_dict(state_dict)
 
 def save_checkpoint(model, optimizer, lr_scheduler, epoch, args, suffix):
     checkpoint = {
-        'model': model.state_dict(),
+        'model': _get_ddp_model_state_dict(model),
         'optimizer': optimizer.state_dict(),
         'lr_scheduler': lr_scheduler.state_dict(),
         'epoch': epoch,
@@ -54,7 +78,7 @@ def median_frequency_exp(dataset: Dataset, num_classes: int, soft: float):
 
 def train_epoch(model, dataloader, criterion, optimizer, lr_scheduler, device):
     model.train()
-    mean_loss = torchmetrics.MeanMetric().to(device)
+    mean_loss = torchmetrics.MeanMetric(sync_on_compute=True).to(device)
 
     for input, target in dataloader:
         if isinstance(input, list):
@@ -83,8 +107,8 @@ def train_epoch(model, dataloader, criterion, optimizer, lr_scheduler, device):
 
 def evaluate(model, dataloader, criterion, num_classes, device):
     model.eval()
-    mean_loss = torchmetrics.MeanMetric().to(device)
-    class_iou = torchmetrics.JaccardIndex(num_classes=num_classes, task='multiclass', average='none').to(device)
+    mean_loss = torchmetrics.MeanMetric(sync_on_compute=True).to(device)
+    class_iou = torchmetrics.JaccardIndex(num_classes=num_classes, task='multiclass', average='none', sync_on_compute=True).to(device)
 
     with torch.inference_mode():
         for input, target in dataloader:
@@ -112,9 +136,21 @@ def evaluate(model, dataloader, criterion, num_classes, device):
     return mean_loss, class_iou, miou, iou_std
 
 def main(args):
+    # DDP init (use `torchrun --nproc_per_node=<N> -m scripts.train_model ...`)
+    if args.ddp:
+        if not dist.is_available():
+            raise RuntimeError("torch.distributed is not available in this environment.")
+        if not dist.is_initialized():
+            dist.init_process_group(backend=args.ddp_backend, init_method="env://")
+
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        torch.cuda.set_device(local_rank)
+        args.device = f"cuda:{local_rank}"
+
     suffix = f'.hetero' if args.hetero else ''
     args.experiment_name = f'{args.model}.{args.input_mode}.{args.target_mode}{suffix}.{str(uuid.uuid4())[:4]}'
-    print(args.experiment_name)
+    if _is_main_process():
+        print(args.experiment_name)
 
     def _normalize_input_mode(mode: str) -> str:
         mode = mode.strip().lower()
@@ -185,6 +221,17 @@ def main(args):
     train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=2)
     val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=False, num_workers=2)
     test_dataloader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=2)
+    if args.ddp:
+        train_sampler = DistributedSampler(train_data, num_replicas=_world_size(), rank=_rank(), shuffle=True, drop_last=False)
+        val_sampler = DistributedSampler(val_data, num_replicas=_world_size(), rank=_rank(), shuffle=False, drop_last=False)
+        test_sampler = DistributedSampler(test_data, num_replicas=_world_size(), rank=_rank(), shuffle=False, drop_last=False)
+        train_dataloader = DataLoader(train_data, batch_size=args.batch_size, sampler=train_sampler, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+        val_dataloader = DataLoader(val_data, batch_size=args.batch_size, sampler=val_sampler, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+        test_dataloader = DataLoader(test_data, batch_size=args.batch_size, sampler=test_sampler, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+    else:
+        train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+        val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+        test_dataloader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     if isinstance(train_data.num_channels, list):
         list_models = {"mininet_multimodal", "segformer_b0_multimodal", "cmx_b0", "unet_multimodal", "unet_moe_multimodal"}
@@ -195,9 +242,24 @@ def main(args):
     if args.moe_aux_loss and hasattr(model, "return_aux_loss"):
         model.return_aux_loss = True
     optimizer, lr_scheduler = models.create_optimizers(args.model, model, args.max_epoch)
+    if args.ddp:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[int(os.environ.get("LOCAL_RANK", "0"))],
+            output_device=int(os.environ.get("LOCAL_RANK", "0")),
+            find_unused_parameters=args.find_unused_parameters,
+        )
 
     # Calculate loss weights and define loss
-    loss_weights = median_frequency_exp(train_data, train_data.num_classes, 0.12)
+    if args.ddp:
+        if _is_main_process():
+            loss_weights = median_frequency_exp(train_data, train_data.num_classes, 0.12)
+        else:
+            loss_weights = torch.zeros(train_data.num_classes, dtype=torch.float32)
+        loss_weights = loss_weights.to(args.device)
+        dist.broadcast(loss_weights, src=0)
+    else:
+        loss_weights = median_frequency_exp(train_data, train_data.num_classes, 0.12)
     criterion = torch.nn.CrossEntropyLoss(loss_weights.to(args.device))
 
     if args.resume:
@@ -206,7 +268,7 @@ def main(args):
                 checkpoint = torch.load(args.resume, map_location=args.device)
         except AttributeError:
             checkpoint = torch.load(args.resume, map_location=args.device)
-        model.load_state_dict(checkpoint['model'])
+        _load_ddp_model_state_dict(model, checkpoint['model'])
         if not args.test_only:
             args.start_epoch = checkpoint['epoch'] + 1
             optimizer.load_state_dict(checkpoint['optimizer'])
@@ -215,15 +277,19 @@ def main(args):
     if args.test_only:
         # Evaluate model
         test_loss, test_class_iou, test_miou, test_iou_std = evaluate(model, test_dataloader, criterion, train_data.num_classes, args.device)
-        print(f'test/loss: {test_loss} | test/class_iou: {test_class_iou.tolist()} | test/miou: {test_miou}, test/iou_std: {test_iou_std}')
+        if _is_main_process():
+            print(f'test/loss: {test_loss} | test/class_iou: {test_class_iou.tolist()} | test/miou: {test_miou}, test/iou_std: {test_iou_std}')
         return
 
     # Start logging
-    if args.wandb:
+    if args.wandb and _is_main_process():
         wandb.init(project=args.wandb, entity='separa', name=args.experiment_name, config=args)
 
     # Train
-    os.makedirs(args.results_path, exist_ok=True)
+    if _is_main_process():
+        os.makedirs(args.results_path, exist_ok=True)
+    if args.ddp:
+        dist.barrier()
     best_val_miou = 0
     best_path = os.path.join(args.results_path, f'{args.experiment_name}.best.pth')
 
@@ -243,7 +309,7 @@ def main(args):
                 ),
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=2,
+                num_workers=args.num_workers,
             )
             for m in ("both", "rgb", "hyper")
         }
@@ -260,23 +326,27 @@ def main(args):
                 ),
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=2,
+                num_workers=args.num_workers,
             )
             for m in ("both", "rgb", "hyper")
         }
 
-    for epoch in trange(args.start_epoch, args.max_epoch):
+    epoch_iter = trange(args.start_epoch, args.max_epoch) if _is_main_process() else range(args.start_epoch, args.max_epoch)
+    for epoch in epoch_iter:
+        if args.ddp:
+            train_dataloader.sampler.set_epoch(epoch)
         train_loss = train_epoch(model, train_dataloader, criterion, optimizer, lr_scheduler, args.device)
         val_loss, val_class_iou, val_miou, val_iou_std = evaluate(model, val_dataloader, criterion, train_data.num_classes, args.device)
         val_miou_f = float(val_miou)
 
-        if val_miou_f > best_val_miou:
+        if _is_main_process() and val_miou_f > best_val_miou:
             save_checkpoint(model, optimizer, lr_scheduler, epoch, args, 'best')
             best_val_miou = val_miou_f
 
-        print(f'epoch: {epoch:04d} | train/loss: {train_loss:.4f} | val/loss: {val_loss:.4f} | val/miou: {val_miou:.4f}')
+        if _is_main_process():
+            print(f'epoch: {epoch:04d} | train/loss: {train_loss:.4f} | val/loss: {val_loss:.4f} | val/miou: {val_miou:.4f}')
 
-        if args.wandb:
+        if args.wandb and _is_main_process():
             val_class_iou = {f'val/iou_{train_data.classes_names[i]}': val_class_iou[i] for i in range(train_data.num_classes)}
             wandb.log({
                 "train/lr": lr_scheduler.get_last_lr()[0],
@@ -287,7 +357,7 @@ def main(args):
                 **val_class_iou
             })
 
-        if val_dataloaders_by_mode is not None:
+        if val_dataloaders_by_mode is not None and _is_main_process():
             by_mode = {}
             for m, dl in val_dataloaders_by_mode.items():
                 _, _, miou, _ = evaluate(model, dl, criterion, train_data.num_classes, args.device)
@@ -296,7 +366,10 @@ def main(args):
             if args.wandb:
                 wandb.log({f"val/miou_{k}": v for k, v in by_mode.items()})
 
-    save_checkpoint(model, optimizer, lr_scheduler, epoch, args, 'last')
+    if _is_main_process():
+        save_checkpoint(model, optimizer, lr_scheduler, epoch, args, 'last')
+    if args.ddp:
+        dist.barrier()
 
     # Evaluate the best checkpoint (if available)
     if os.path.exists(best_path):
@@ -305,19 +378,20 @@ def main(args):
                 checkpoint = torch.load(best_path, map_location=args.device)
         except AttributeError:
             checkpoint = torch.load(best_path, map_location=args.device)
-        model.load_state_dict(checkpoint["model"])
+        _load_ddp_model_state_dict(model, checkpoint["model"])
 
     test_loss, test_class_iou, test_miou, test_iou_std = evaluate(model, test_dataloader, criterion, train_data.num_classes, args.device)
-    print(f'test/loss: {test_loss} | test/miou: {test_miou}')
+    if _is_main_process():
+        print(f'test/loss: {test_loss} | test/miou: {test_miou}')
 
-    if test_dataloaders_by_mode is not None:
+    if test_dataloaders_by_mode is not None and _is_main_process():
         by_mode = {}
         for m, dl in test_dataloaders_by_mode.items():
             _, _, miou, _ = evaluate(model, dl, criterion, train_data.num_classes, args.device)
             by_mode[m] = float(miou)
         print(f"test/miou by mode: {by_mode}")
 
-    if args.wandb:
+    if args.wandb and _is_main_process():
         test_class_iou = {f'test/best_iou_{train_data.classes_names[i]}': test_class_iou[i] for i in range(train_data.num_classes)}
         wandb.log({
             "test/best_loss": test_loss,
@@ -327,6 +401,10 @@ def main(args):
         })
         if test_dataloaders_by_mode is not None:
             wandb.log({f"test/miou_{k}": v for k, v in by_mode.items()})
+
+    if args.ddp:
+        dist.barrier()
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -344,6 +422,11 @@ if __name__ == "__main__":
     parser.add_argument('--modal-mix', type=str, default='both:0.34,rgb:0.33,hyper:0.33', help="Mix for --hetero. Format: 'both:0.4,rgb:0.3,hyper:0.3'.")
     parser.add_argument('--eval-per-mode', action='store_true', help="When --hetero, also report val/test mIoU for modes: both/rgb/hyper.")
     parser.add_argument('--moe-aux-loss', action='store_true', help="If supported by the model (e.g. UNetMoE), add the MoE load-balancing auxiliary loss.")
+    # multi-GPU (DDP via torchrun)
+    parser.add_argument('--ddp', action='store_true', help="Enable DistributedDataParallel. Launch with torchrun.")
+    parser.add_argument('--ddp-backend', type=str, default='nccl')
+    parser.add_argument('--find-unused-parameters', action='store_true', help="Set True if your model has conditional branches causing unused params.")
+    parser.add_argument('--num-workers', type=int, default=2)
     # training
     parser.add_argument('--batch-size', type=int, default=12)
     parser.add_argument('--start-epoch', type=int, default=0)
