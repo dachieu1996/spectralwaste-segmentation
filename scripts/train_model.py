@@ -183,8 +183,11 @@ def main(args):
     if args.hetero:
         if not isinstance(input_mode, list) or len(input_mode) != 2:
             raise ValueError("--hetero requires --input-mode to be a 2-modality list, e.g. 'rgb,hyper'.")
-        if set(input_mode) != {"rgb", "hyper"}:
-            raise ValueError("--hetero currently supports only 'rgb' and 'hyper' (HSI).")
+        if "rgb" not in input_mode:
+            raise ValueError("--hetero requires one modality to be 'rgb'.")
+        other = input_mode[0] if input_mode[1] == "rgb" else input_mode[1]
+        if not other.startswith("hyper"):
+            raise ValueError("--hetero requires the non-RGB modality to start with 'hyper' (e.g. 'hyper' or 'hyper_pca3').")
 
         train_data = HeterogeneousSpectralWasteSegmentation(
             args.data_path,
@@ -418,7 +421,7 @@ if __name__ == "__main__":
     parser.add_argument('--input-mode', type=str, default='rgb')
     parser.add_argument('--target-mode', type=str, default='labels_rgb')
     # heterogeneous training (single model, mixed modalities)
-    parser.add_argument('--hetero', action='store_true', help="Train with mixed RGB/HSI availability (zeros-out missing modality). Requires --input-mode 'rgb,hyper' (or 'rgb,hsi').")
+    parser.add_argument('--hetero', action='store_true', help="Train with mixed RGB/HSI availability (zeros-out missing modality). Requires --input-mode 'rgb,hyper' (or 'rgb,hsi', or 'rgb,hyper_pca3').")
     parser.add_argument('--modal-mix', type=str, default='both:0.34,rgb:0.33,hyper:0.33', help="Mix for --hetero. Format: 'both:0.4,rgb:0.3,hyper:0.3'.")
     parser.add_argument('--eval-per-mode', action='store_true', help="When --hetero, also report val/test mIoU for modes: both/rgb/hyper.")
     parser.add_argument('--moe-aux-loss', action='store_true', help="If supported by the model (e.g. UNetMoE), add the MoE load-balancing auxiliary loss.")

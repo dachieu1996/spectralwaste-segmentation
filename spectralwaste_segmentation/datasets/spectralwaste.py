@@ -152,7 +152,7 @@ class HeterogeneousSpectralWasteSegmentation(SpectralWasteSegmentation):
     """
     Dataset wrapper for training with *heterogeneous modality availability*.
 
-    We always load **both** modalities (RGB + HSI) so the model input channel
+    We always load **both** modalities (RGB + HSI-like) so the model input channel
     count is constant, but optionally "drop" one modality by replacing it with
     zeros to simulate:
       - `both`: RGB + HSI available
@@ -182,8 +182,14 @@ class HeterogeneousSpectralWasteSegmentation(SpectralWasteSegmentation):
         forced_mode: Optional[Mode] = None,
     ):
         input_modes = list(input_mode) if isinstance(input_mode, (list, tuple)) else [input_mode]
-        if set(input_modes) != {"rgb", "hyper"} or len(input_modes) != 2:
-            raise ValueError("HeterogeneousSpectralWasteSegmentation requires input_mode=['rgb','hyper'] (order free).")
+        if len(input_modes) != 2 or "rgb" not in input_modes:
+            raise ValueError("HeterogeneousSpectralWasteSegmentation requires 2 inputs including 'rgb', e.g. ['rgb','hyper'] or ['rgb','hyper_pca3'].")
+        other = input_modes[0] if input_modes[1] == "rgb" else input_modes[1]
+        if not other.startswith("hyper"):
+            raise ValueError("HeterogeneousSpectralWasteSegmentation requires the non-RGB modality to start with 'hyper' (e.g. 'hyper' or 'hyper_pca3').")
+
+        self._rgb_idx = input_modes.index("rgb")
+        self._hyper_idx = 1 - self._rgb_idx
 
         if forced_mode is not None and forced_mode not in self._VALID_FORCED_MODES:
             raise ValueError(f"forced_mode must be one of {list(self._VALID_FORCED_MODES)}")
@@ -231,7 +237,8 @@ class HeterogeneousSpectralWasteSegmentation(SpectralWasteSegmentation):
         if not isinstance(inputs, list) or len(inputs) != 2:
             raise RuntimeError("Expected 2-modalities inputs as a list [rgb, hyper].")
 
-        rgb, hyper = inputs
+        rgb = inputs[self._rgb_idx]
+        hyper = inputs[self._hyper_idx]
         if self.forced_mode is not None:
             mode = self.forced_mode
         else:
